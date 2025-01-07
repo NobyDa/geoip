@@ -8,10 +8,8 @@ on:
       - master
     paths-ignore:
       - ".gitignore"
-      - "config-example.json"
-      - "LICENSE"
-      - "README.md"
-      - ".github/dependabot.yml"
+      - "LICENSE*"
+      - "*.md"
 jobs:
   build:
     name: Build
@@ -49,18 +47,27 @@ jobs:
         env:
           LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
         run: |
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o GeoLite2-Country-CSV.zip
+          mkdir -p output
+          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-ASN.tar.gz
+          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o ./output/GeoLite2-ASN-CSV.zip
+          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" -o ./output/GeoLite2-Country.tar.gz
+          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o ./output/GeoLite2-Country-CSV.zip
+
+      - name: Prepare GeoLite2 databases
+        run: |
+          cp ./output/{*.gz,*.zip} ./
           unzip GeoLite2-Country-CSV.zip
           rm -f GeoLite2-Country-CSV.zip
           mv GeoLite2* geolite2
 
       - name: Build geoip.dat file
         run: |
-          go run ./
+          go build ./
+          ./geoip convert -c ./config.json
 
       - name: Generate sha256 checksum for mmdb files
         run: |
-          cd ./output/maxmind || exit 1
+          cd ./output || exit 1
           for name in $(ls *.mmdb); do
             sha256sum ${name} > ./${name}.sha256sum
           done
@@ -81,7 +88,7 @@ jobs:
 
       - name: Git push assets to "release" branch
         run: |
-          cd publish || exit 1
+          cd output || exit 1
           git init
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -92,12 +99,18 @@ jobs:
           git push -f -u geoip release
 
       - name: Remove some files to avoid publishing to GitHub release
-        run: rm -rf ./publish/*.{gz,zip} ./publish/text
+        run: |
+          rm -rf ./output/*.{gz,zip}
+          rm -rf ./output/GeoLite2-*.csv
+          rm -rf ./output/GeoLite2-*.mmdb
+          rm -rf ./output/GeoLite2-*.sha256sum
+          rm -rf ./output/{clash,dat,mrs,nginx,srs,surge,text}
 
       - name: Upload files to GitHub release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file_glob: true
-          file: ./publish/*
+          file: ./output/*
+          release_name: ${{ env.RELEASE_NAME }}
           tag: ${{ env.TAG_NAME }}

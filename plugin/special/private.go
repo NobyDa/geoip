@@ -8,8 +8,8 @@ import (
 
 const (
 	entryNamePrivate = "private"
-	typePrivate      = "private"
-	descPrivate      = "Convert LAN and private network CIDR to other formats"
+	TypePrivate      = "private"
+	DescPrivate      = "Convert LAN and private network CIDR to other formats"
 )
 
 var privateCIDRs = []string{
@@ -37,55 +37,81 @@ var privateCIDRs = []string{
 }
 
 func init() {
-	lib.RegisterInputConfigCreator(typePrivate, func(action lib.Action, data json.RawMessage) (lib.InputConverter, error) {
+	lib.RegisterInputConfigCreator(TypePrivate, func(action lib.Action, data json.RawMessage) (lib.InputConverter, error) {
 		return newPrivate(action, data)
 	})
-	lib.RegisterInputConverter(typePrivate, &private{
-		Description: descPrivate,
+	lib.RegisterInputConverter(TypePrivate, &Private{
+		Description: DescPrivate,
 	})
 }
 
 func newPrivate(action lib.Action, data json.RawMessage) (lib.InputConverter, error) {
-	return &private{
-		Type:        typePrivate,
+	var tmp struct {
+		OnlyIPType lib.IPType `json:"onlyIPType"`
+	}
+
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &tmp); err != nil {
+			return nil, err
+		}
+	}
+
+	return &Private{
+		Type:        TypePrivate,
 		Action:      action,
-		Description: descPrivate,
+		Description: DescPrivate,
+		OnlyIPType:  tmp.OnlyIPType,
 	}, nil
 }
 
-type private struct {
+type Private struct {
 	Type        string
 	Action      lib.Action
 	Description string
+	OnlyIPType  lib.IPType
 }
 
-func (p *private) GetType() string {
+func (p *Private) GetType() string {
 	return p.Type
 }
 
-func (p *private) GetAction() lib.Action {
+func (p *Private) GetAction() lib.Action {
 	return p.Action
 }
 
-func (p *private) GetDescription() string {
+func (p *Private) GetDescription() string {
 	return p.Description
 }
 
-func (p *private) Input(container lib.Container) (lib.Container, error) {
-	entry := lib.NewEntry(entryNamePrivate)
+func (p *Private) Input(container lib.Container) (lib.Container, error) {
+	entry, found := container.GetEntry(entryNamePrivate)
+	if !found {
+		entry = lib.NewEntry(entryNamePrivate)
+	}
+
 	for _, cidr := range privateCIDRs {
 		if err := entry.AddPrefix(cidr); err != nil {
 			return nil, err
 		}
 	}
 
+	var ignoreIPType lib.IgnoreIPOption
+	switch p.OnlyIPType {
+	case lib.IPv4:
+		ignoreIPType = lib.IgnoreIPv6
+	case lib.IPv6:
+		ignoreIPType = lib.IgnoreIPv4
+	}
+
 	switch p.Action {
 	case lib.ActionAdd:
-		if err := container.Add(entry); err != nil {
+		if err := container.Add(entry, ignoreIPType); err != nil {
 			return nil, err
 		}
 	case lib.ActionRemove:
-		container.Remove(entryNamePrivate)
+		if err := container.Remove(entry, lib.CaseRemovePrefix, ignoreIPType); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, lib.ErrUnknownAction
 	}
