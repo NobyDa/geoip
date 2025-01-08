@@ -1,4 +1,4 @@
-name: Build geoip.dat
+name: Build geoip files
 on:
   workflow_dispatch:
   schedule:
@@ -31,19 +31,7 @@ jobs:
           echo "RELEASE_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
         shell: bash
 
-      - name: Fetch lists from ripe.net
-        run: |
-          chmod +x asn.sh
-          ./asn.sh
-
-      - name: Append more CIDRs
-        run: |
-          curl -sSL https://www.cloudflare.com/ips-v4 | grep "/" >> data/cloudflare
-          curl -sSL https://www.cloudflare.com/ips-v6 | grep "/" >> data/cloudflare
-          curl -sSL https://api.fastly.com/public-ip-list | jq --raw-output '.addresses[],.ipv6_addresses[]' >> data/fastly
-          curl -sSL https://ip-ranges.amazonaws.com/ip-ranges.json | jq --raw-output '.prefixes[],.ipv6_prefixes[] | select(.service == "CLOUDFRONT") | .ip_prefix,.ipv6_prefix' | grep "/" >> data/cloudfront
-
-      - name: Get GeoLite2
+      - name: Download GeoLite2 databases
         env:
           LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
         run: |
@@ -57,13 +45,38 @@ jobs:
         run: |
           cp ./output/{*.gz,*.zip} ./
           unzip GeoLite2-Country-CSV.zip
-          rm -f GeoLite2-Country-CSV.zip
-          mv GeoLite2* geolite2
+          unzip GeoLite2-ASN-CSV.zip
+          tar -xvzf GeoLite2-Country.tar.gz
+          tar -xvzf GeoLite2-ASN.tar.gz
 
-      - name: Build geoip.dat file
+          cp GeoLite2-Country_*/*.mmdb ./output/
+          cp GeoLite2-ASN_*/*.mmdb ./output/
+          cp GeoLite2-Country-CSV_*/{GeoLite2-Country-Blocks-*,GeoLite2-Country-Locations-en,GeoLite2-Country-Locations-zh-CN}.csv ./output/
+          cp GeoLite2-ASN-CSV_*/*.csv ./output/
+
+          mkdir -p geolite2
+          cp GeoLite2-Country-CSV_*/*.csv ./geolite2/
+          cp GeoLite2-ASN-CSV_*/*.csv ./geolite2/
+
+      - name: Build geoip files
         run: |
           go build ./
           ./geoip convert -c ./config.json
+
+      - name: Verify mmdb files
+        run: |
+          cd ./output || exit 1
+          go install -v github.com/maxmind/mmdbverify@latest
+          for name in $(ls *.mmdb); do
+            $(go env GOPATH)/bin/mmdbverify -file ${name}
+          done
+
+      - name: Generate sha256 checksum for dat files
+        run: |
+          cd ./output || exit 1
+          for name in $(ls *.dat); do
+            sha256sum ${name} > ./${name}.sha256sum
+          done
 
       - name: Generate sha256 checksum for mmdb files
         run: |
@@ -71,20 +84,6 @@ jobs:
           for name in $(ls *.mmdb); do
             sha256sum ${name} > ./${name}.sha256sum
           done
-
-      - name: Download GeoLite2
-        env:
-          LICENSE_KEY: ${{ secrets.MAXMIND_GEOLITE2_LICENSE }}
-        run: |
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" -o GeoLite2-ASN.tar.gz
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o GeoLite2-ASN-CSV.zip
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" -o GeoLite2-Country.tar.gz
-          curl -L "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=${LICENSE_KEY}&suffix=zip" -o GeoLite2-Country-CSV.zip
-
-      - name: Move files to publish directory
-        run: |
-          mkdir -p publish
-          mv ./output/maxmind/*.mmdb ./output/maxmind/*.sha256sum ./publish/
 
       - name: Git push assets to "release" branch
         run: |
@@ -97,6 +96,13 @@ jobs:
           git commit -m "${{ env.RELEASE_NAME }}"
           git remote add geoip "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
           git push -f -u geoip release
+
+      - name: Purge jsdelivr CDN
+        run: |
+          cd output || exit 1
+          for file in $(ls); do
+            curl -i "https://purge.jsdelivr.net/gh/${{ github.repository }}@release/${file}"
+          done
 
       - name: Remove some files to avoid publishing to GitHub release
         run: |
