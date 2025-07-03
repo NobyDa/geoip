@@ -54,6 +54,16 @@
       "action": "add",
       "args": {
         "name": "cn",
+        "mark": "misakaio",
+        "uri": "https://raw.githubusercontent.com/misakaio/chnroutes2/refs/heads/master/chnroutes.txt",
+        "onlyIPType": "ipv4"
+      }
+    },
+    {
+      "type": "text",
+      "action": "add",
+      "args": {
+        "name": "cn",
         "mark": "USTC高一凡v4",
         "uri": "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt",
         "onlyIPType": "ipv4"
